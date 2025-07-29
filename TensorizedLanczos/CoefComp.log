@@ -1,0 +1,6 @@
+nohup: ignoring input
+GKS: cannot open display - headless operation mode active
+┌ Warning: Assignment to `p1` in soft scope is ambiguous because a global variable by the same name exists: `p1` will be treated as a new local. Disambiguate by using `local p1` to suppress this warning or `global p1` to assign to the existing global variable.
+└ @ ~/DoppioFiles/TensorizedLanczos/CoefComp.jl:38
+┌ Warning: Assignment to `p1` in soft scope is ambiguous because a global variable by the same name exists: `p1` will be treated as a new local. Disambiguate by using `local p1` to suppress this warning or `global p1` to assign to the existing global variable.
+└ @ ~/DoppioFiles/TensorizedLanczos/CoefComp.jl:42

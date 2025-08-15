@@ -2,7 +2,7 @@ using LinearAlgebra, Plots, LaTeXStrings
 include("LanczosSpikeDetection.jl")
 include("AuxiliaryFunctions.jl")
 
-N = 5000
+N = 3000
 d = 0.1
 M = convert(Int64,ceil(N/d))
 X = randn(N,M)
@@ -10,7 +10,8 @@ K = 200
 nodes,weights = Legendre(K)
 a = 0.1
 b = 4
-h = x-> a<x<b ? (x^4+1)*sqrt(x-a)*sqrt(b-x)/x^2 : 0
+# h = x-> a<x<b ? (x^4+1)*sqrt(x-a)*sqrt(b-x)/x^2 : 0
+h = x-> a<x<b ? (2*(3.5-x)^3+x)*(b-x)^(1/2)*(x-a)^(1/2)/(2*(4.5-x)^2) : 0
 normCst = QuadInt(h,a,b,nodes,weights)
 scaled_h = x->h(x)/normCst
 quantiles = zeros(Float64,N+1)
@@ -20,97 +21,58 @@ for i=2:N
     QuantEq = x->QuadInt(scaled_h,a,x,nodes,weights)-(i-1)/N
     quantiles[i] = Bisection(QuantEq,quantiles[1],quantiles[N+1])
 end
+spikes = [6,6.4,6.6,6.9,7,7.5,7.7,8]
+quantiles[1:length(spikes)] = spikes
 sqrtΣ = Diagonal(sqrt.(quantiles[1:end-1]))
 W = sqrtΣ*(1/M*X*X')*sqrtΣ'|>Symmetric
-evals = eigvals(W)
 
-vecNbr = 200
+vecNbr = 100
 vecList = randn(N,vecNbr)
 
 # No Averaging
-k = convert(Int64,floor(log(N)/2))
+seq_len = convert(Int64,floor(log(N)/2))
 jmp = 5
 tol = 2.1/sqrt(N)
 max_iter = convert(Int64,ceil(max(6*log(N)+24,N/4,sqrt(N))))
-TChol,L_list = CholeskyList(W,tol,k,jmp,max_iter,vecNbr;vecList=vecList)
-p1 = plot(diag(TChol[1],0),linecolor=:salmon,linewidth=1,alpha=0.1,label="No Average Diag",framestyle=:box, legendfontsize=12, xtickfontsize=12, ytickfontsize=12)
-for i=1:length(L_list)
-    p1 = plot!(diag(TChol[i],0),linecolor=:salmon,linewidth=1,alpha=0.1,label="")
+TrueChol, ModChol = CholSeq(W,tol,seq_len,jmp,max_iter,vecNbr;vecList=vecList)
+p1 = plot(diag(TrueChol[1],0),linecolor=:salmon,linewidth=1,alpha=0.1,label="No Average Diag",framestyle=:box, legendfontsize=12, xtickfontsize=12, ytickfontsize=12)
+for i=1:length(ModChol)
+    p1 = plot!(diag(TrueChol[i],0),linecolor=:salmon,linewidth=1,alpha=0.1,label="")
 end
-p1 = plot!(diag(TChol[1],-1),linecolor=:lightblue,linewidth=1,alpha=0.1,label="No Average Off Diag")
-for i=1:length(L_list)
-    p1 = plot!(diag(TChol[i],-1),linecolor=:lightblue,linewidth=1,alpha=0.1,label="")
+p1 = plot!(diag(TrueChol[1],-1),linecolor=:lightblue,linewidth=1,alpha=0.1,label="No Average Off Diag")
+for i=1:length(ModChol)
+    p1 = plot!(diag(TrueChol[i],-1),linecolor=:lightblue,linewidth=1,alpha=0.1,label="")
 end
 
 # Tensorized Average
-function KronMult(A, x)
-    N = size(A, 1)
-    K = length(x) ÷ N
-    y = similar(x)
-    for i in 0:K-1
-        y[(i*N+1):(i+1)*N] .= A * view(x, (i*N+1):(i+1)*N)
-    end
-    return y
-end
-function CholeskyKron(mat,tol::Float64,k::Integer,jmp::Integer,max_iter::Integer,v;orth::Bool=true)
-    N = size(mat, 1)
-    @assert length(v) % N==0 "Dimensions don't match!"
-    K = length(v) ÷ N
-    Q = zeros(eltype(mat),K*N, max_iter)
-    q = v / norm(v)
-    Q[:, 1] .= q
-    d = zeros(eltype(mat),max_iter)
-    od = zeros(eltype(mat),max_iter-1)
-    z = similar(q)
-    dAvrg_old, odAvrg_old, dStd_old, odStd_old = zeros(Float64,4)
-    idx = k
-    i=1
-    Convflag = false
-    while i<=max_iter && !Convflag 
-        z .= KronMult(mat,q)
-        d[i] = dot(q, z)
-        if orth
-            Qview = @view Q[:, 1:i]
-            z .-= Qview * (Qview' * z)
-            z .-= Qview * (Qview' * z)
-        else
-            z .-= d[i] * q
-            if i > 1
-                z .-= (od[i-1]) * (@view Q[:, i-1])
-            end
-        end
-        if i < max_iter
-            od[i] = norm(z)
-            if od[i]==0
-                return Cholesky(SymTridiagonal(d[1:i],od[1:i-1]))
-            end
-            q .= z / od[i]
-            Q[:, i+1] .= q
-            if i==idx 
-                dAvrg = sum(@view d[i-k+1:i])/k
-                odAvrg = sum(@view od[i-k+1:i])/k
-                dStd = sqrt(sum(((@view d[i-k+1:i]).-dAvrg).^2)/(k-1))
-                odStd = sqrt(sum(((@view od[i-k+1:i]).-odAvrg).^2)/(k-1))
-                if dStd<tol && odStd<tol && dStd_old<tol && odStd_old<tol && abs(dAvrg-dAvrg_old)<tol && abs(odAvrg-odAvrg_old)<tol
-                    z .= KronMult(mat,q)
-                    d[i+1] = dot(q, z)
-                    Convflag = true
-                else
-                    dAvrg_old, odAvrg_old, dStd_old, odStd_old = dAvrg, odAvrg, dStd, odStd
-                    idx = idx+jmp
-                end
-            end
-        end
-        i+=1
-    end
-    i = min(i,max_iter)
-    return Cholesky(SymTridiagonal(d[1:i],od[1:i-1]))
-end
-
 tallvec = vec(vecList)
-CholKron = CholeskyKron(W,tol,k,jmp,max_iter,tallvec)
-n = size(CholKron, 1)
-p1 = plot!(diag(CholKron,0),linecolor=:darkred,linewidth=3,linestyle= :dash,label="Kron Diag")
-p1 = plot!(diag(CholKron,-1),linecolor=:darkblue,linewidth=3,linestyle= :dash,label="Kron Off Diag")
+KronChol = KronConvChol(W,tol,seq_len,jmp,max_iter,tallvec)
+n1 = size(KronChol, 1)
+p1 = plot!(diag(KronChol,0),linecolor=:darkred,linewidth=3,label="Kron Diag")
+p1 = plot!(diag(KronChol,-1),linecolor=:darkblue,linewidth=3,label="Kron Off Diag")
 
+# Alternative Tensorized Average
+Vec = copy(vecList)
+for i=1:size(Vec,2)
+    Vec[:,i] = Vec[:,i]/norm(Vec[:,i])
+end
+tallvec = vec(Vec)
+KronChol = KronConvChol(W,tol,seq_len,jmp,max_iter,tallvec)
+n2 = size(KronChol, 1)
+p1 = plot!(diag(KronChol,0),linecolor=:darkorange,linestyle=:dash,linewidth=2,label="Alt Kron Diag")
+p1 = plot!(diag(KronChol,-1),linecolor=:darkgreen,linestyle=:dash,linewidth=2,label="Alt Kron Off Diag")
+
+# Trace Measure (Kronecker)
+Q, R = qr(vecList)
+sgn = Diagonal(sign.(diag(R)))
+R = sgn*R
+Q = Q*sgn
+Q = Matrix(Q)
+tallvec = vec(Q)
+KronChol = KronConvChol(W,tol,seq_len,jmp,max_iter,tallvec)
+n3 = size(KronChol, 1)
+p1 = plot!(diag(KronChol,0),linecolor=:firebrick,linestyle=:dashdotdot,linewidth=2,label="Trace/Kron Diag")
+p1 = plot!(diag(KronChol,-1),linecolor=:midnightblue,linestyle=:dashdotdot,linewidth=2,label="Trace/Kron Off Diag")
+
+xlims!(p1, 0, max(n1,n2,n3)+20)
 savefig(p1, "CoefComp.pdf")
